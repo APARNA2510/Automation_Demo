@@ -9,6 +9,13 @@ module.exports = {
             "html:reports/cucumber-report.html"
         ],
         publishQuiet: true
+    },
+    otpNegative: {
+        require: [
+            "support/**/*.js",
+            "step-definitions/**/*.js"
+        ],
+        tags: "@otp-negative",
+        publishQuiet: true
     }
 };
-

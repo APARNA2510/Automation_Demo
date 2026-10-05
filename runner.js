@@ -21,7 +21,7 @@ class ShoppingCartRunner {
             return;
         }
 
-        const phoneNumber = userConfig.phoneNumber;
+        const phoneNumber = process.env.FLIPKART_PHONE || userConfig.phoneNumber;
 
         if (!phoneNumber || !/^\d{10}$/.test(phoneNumber)) {
             console.error(
