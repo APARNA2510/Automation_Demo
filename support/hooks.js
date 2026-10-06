@@ -15,24 +15,29 @@ After(async function ({ pickle, result }) {
             return;
         }
 
-        const screenshotsDirectory = path.join(__dirname, "..", "screenshots");
-        await fs.mkdir(screenshotsDirectory, { recursive: true });
-
         const scenarioName = pickle.name
             .replace(/[<>:"/\\|?*\x00-\x1F]/g, "-")
             .slice(0, 80);
         const status = result.status.toLowerCase();
+        const screenshotsDirectory = path.join(__dirname, "..", "screenshots");
         const screenshotPath = path.join(
             screenshotsDirectory,
             `${scenarioName}-${status}-${Date.now()}.png`
         );
-        const screenshot = await this.page.screenshot({
-            path: screenshotPath,
-            fullPage: true
-        });
+        try {
+            await fs.mkdir(screenshotsDirectory, { recursive: true });
+            const screenshot = await this.page.screenshot({
+                path: screenshotPath,
+                fullPage: true
+            });
 
-        await this.attach(screenshot, "image/png");
-        console.log(`Scenario ${status} screenshot saved: ${screenshotPath}`);
+            await this.attach(screenshot, "image/png");
+            console.log(`Scenario ${status} screenshot saved: ${screenshotPath}`);
+        } catch (error) {
+            console.warn(
+                `Could not capture screenshot for "${pickle.name}": ${error.message}`
+            );
+        }
     } finally {
         await this.close();
     }

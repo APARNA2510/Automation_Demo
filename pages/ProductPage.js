@@ -15,6 +15,10 @@ class ProductPage {
 
     async searchProduct(productName) {
 
+        if (typeof productName !== "string") {
+            throw new Error("Product search requires a product name.");
+        }
+
         const normalizedProductName = productName.trim();
 
         if (!normalizedProductName) {
@@ -35,7 +39,7 @@ class ProductPage {
     async verifySearchResultsDisplayed() {
         await this.searchResults.first().waitFor({
             state: "visible",
-            timeout: 15000
+            timeout: 15000 //15 seconds wait
         });
 
         const resultCount = await this.searchResults.count();
@@ -47,7 +51,7 @@ class ProductPage {
     async verifyNoResultsMessage() {
         await this.noResultsMessage.waitFor({
             state: "visible",
-            timeout: 15000
+            timeout: 15000 //15 seconds wait
         });
 
         const resultCount = await this.searchResults.count();
@@ -70,26 +74,78 @@ class ProductPage {
         const skippedProducts = [];
 
         for (let index = 0; index < resultCount; index += 1) {
-            const product = this.searchResults.nth(index);
-            await product.waitFor({
-                state: "visible",
-                timeout: 15000
-            });
-            await product.scrollIntoViewIfNeeded();
+            let productUrl;
+            for (let attempt = 1; attempt <= 3; attempt += 1) {
+                const product = this.searchResults.nth(index);
+                try {
+                    await product.waitFor({
+                        state: "visible",
+                        timeout: 15000
+                    });
+                    productUrl = await product.evaluate(element => {
+                        const link = element.matches('a[href*="/p/"]')
+                            ? element
+                            : element.closest('a[href*="/p/"]') ||
+                                element.querySelector('a[href*="/p/"]');
+                        return link?.href || null;
+                    });
+                    if (productUrl) {
+                        break;
+                    }
+
+                    throw new Error(
+                        `Search result ${index + 1} does not contain a product link.`
+                    );
+                } catch (error) {
+                    if (
+                        !/not attached to the DOM/i.test(error.message) ||
+                        attempt === 3
+                    ) {
+                        throw error;
+                    }
+                    await this.page.waitForTimeout(500);
+                }
+            }
+
+            const productUrlObject = new URL(productUrl, this.page.url());
+            if (
+                productUrlObject.origin !== new URL(this.page.url()).origin ||
+                !/\/p\//i.test(productUrlObject.pathname)
+            ) {
+                throw new Error(
+                    `Search result ${index + 1} contained an invalid product URL: ${productUrl}`
+                );
+            }
 
             console.log(`Opening search result ${index + 1} of ${resultCount}...`);
 
-            const newPagePromise = this.page.context().waitForEvent("page");
-            await product.click();
-
-            const productPage = await newPagePromise;
-            await productPage.waitForLoadState("domcontentloaded");
-            await productPage.waitForTimeout(4000);
+            const productPage = await this.page.context().newPage();
+            try {
+                await productPage.goto(productUrlObject.href, {
+                    waitUntil: "domcontentloaded",
+                    timeout: 30000
+                });
+            } catch (error) {
+                await productPage.close();
+                throw error;
+            }
 
             const productTitle = await productPage.title();
             console.log("Product page title:", productTitle);
+            const selectedProductId = productUrlObject.pathname
+                .match(/\/p\/([^/?]+)/i)?.[1];
 
-            const addToCartButton = productPage.locator(
+            if (!selectedProductId) {
+                await productPage.close();
+                throw new Error(
+                    `Could not determine the product ID from the selected search result URL: ${productUrlObject.href}`
+                );
+            }
+
+            const addToCartButton = productPage.getByRole("button", {
+                name: /add to cart/i
+            }).first();
+            const legacyAddToCartControl = productPage.locator(
                 'svg:has(g[clip-path="url(#AddToCart_a)"], path[d^="M17 18.375H7.35116"])'
             ).locator("xpath=ancestor::div[2]").first();
             const outOfStockMessage = productPage.getByText(
@@ -98,9 +154,40 @@ class ProductPage {
             const isMarkedOutOfStock =
                 await outOfStockMessage.count() > 0 &&
                 await outOfStockMessage.isVisible();
-            const hasVisibleAddToCart =
-                await addToCartButton.count() > 0 &&
-                await addToCartButton.isVisible();
+            let addToCartControl;
+            let hasVisibleAddToCart = false;
+
+            if (!isMarkedOutOfStock) {
+                if (await addToCartButton.count() > 0) {
+                    try {
+                        await addToCartButton.waitFor({
+                            state: "visible",
+                            timeout: 10000
+                        });
+                        addToCartControl = addToCartButton;
+                        hasVisibleAddToCart = true;
+                    } catch (error) {
+                        if (error.name !== "TimeoutError") {
+                            throw error;
+                        }
+                    }
+                }
+
+                if (!hasVisibleAddToCart) {
+                    addToCartControl = legacyAddToCartControl;
+                    try {
+                        await addToCartControl.waitFor({
+                            state: "visible",
+                            timeout: 5000
+                        });
+                        hasVisibleAddToCart = true;
+                    } catch (error) {
+                        if (error.name !== "TimeoutError") {
+                            throw error;
+                        }
+                    }
+                }
+            }
 
             if (isMarkedOutOfStock || !hasVisibleAddToCart) {
                 const reason = isMarkedOutOfStock
@@ -114,27 +201,24 @@ class ProductPage {
                 continue;
             }
 
-            await addToCartButton.scrollIntoViewIfNeeded();
+            await addToCartControl.scrollIntoViewIfNeeded();
             await productPage.waitForTimeout(1000);
             console.log("Clicking Add to Cart...");
-            await addToCartButton.click({ timeout: 15000 });
+            await addToCartControl.click({ timeout: 15000 });
             console.log("Add to Cart clicked successfully.");
 
             await this.closeCartConfirmationIfVisible(productPage);
 
             const selectedProductName = productTitle
-                .split(" Rs.")[0]
                 .replace(/\s+Online at Best Price On Flipkart\.com$/i, "")
+                .replace(/\s+Rs\..*$/i, "")
+                .split(/\s+\(/, 1)[0]
                 .trim();
-            const selectedProductId = new URL(productPage.url())
-                .pathname.match(/\/p\/([^/?]+)/i)?.[1];
-
-            if (!selectedProductId) {
+            if (!selectedProductName) {
                 throw new Error(
-                    `Could not determine the product ID from the product page URL: ${productPage.url()}`
+                    `The product page did not provide a name for cart verification. Page title: ${productTitle || "(empty)"}`
                 );
             }
-
             if (index > 0) {
                 console.log(
                     `Added the next available product after skipping ${index} unavailable result(s).`

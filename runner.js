@@ -1,37 +1,29 @@
 const path = require("path");
-const fs = require("fs");
 const { spawn } = require("child_process");
 
 class ShoppingCartRunner {
     static run() {
-        let userConfig;
-        try {
-            userConfig = JSON.parse(
-                fs.readFileSync(
-                    path.join(__dirname, "test-data", "userConfig.json"),
-                    "utf8"
-                )
-            );
-        } catch (error) {
-            console.error(
-                "Could not read test-data/userConfig.json:",
-                error.message
-            );
-            process.exitCode = 1;
-            return;
+        const phoneVariables = [
+            "FLIPKART_POSITIVE_PHONE",
+            "FLIPKART_INVALID_OTP_PHONE"
+        ];
+
+        for (const variableName of phoneVariables) {
+            if (process.env[variableName] === undefined) {
+                continue;
+            }
+
+            const phoneNumber = process.env[variableName].trim();
+            if (!/^\d{10}$/.test(phoneNumber)) {
+                console.error(
+                    `${variableName} must contain exactly 10 digits when provided.`
+                );
+                process.exitCode = 1;
+                return;
+            }
+
+            process.env[variableName] = phoneNumber;
         }
-
-        const phoneNumber = process.env.FLIPKART_PHONE || userConfig.phoneNumber;
-
-        if (!phoneNumber || !/^\d{10}$/.test(phoneNumber)) {
-            console.error(
-                "Set phoneNumber to a valid 10-digit phone number in test-data/userConfig.json."
-            );
-            process.exitCode = 1;
-            return;
-        }
-
-        process.env.FLIPKART_PHONE = phoneNumber;
 
         const cucumberCli = path.join(
             __dirname,

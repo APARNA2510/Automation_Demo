@@ -1,13 +1,13 @@
 
 Feature: Flipkart Shopping Cart
 
-  Scenario: Search product, skip unavailable results, and verify an available product in the cart
+  Scenario: Search product, skip unavailable results, and verify the first available product in the cart
     Given I am on the Flipkart home page
     When I open the login modal from the home page
     When I log in to Flipkart with my phone number
     When I search for the selected product
     Then matching products should be displayed
-    And I add the selected or next available product to the cart
+    And I add the first available product to the cart
     When I navigate to the cart
     Then the selected product should be displayed in the cart
 

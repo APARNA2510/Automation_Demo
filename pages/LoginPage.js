@@ -1,7 +1,21 @@
 
 const config = require("../config/config");
-const userConfig = require("../test-data/userConfig.json");
 const testData = require("../test-data/testData");
+const userConfig = require("../test-data/userConfig.json");
+
+function configuredPhoneNumber(configKey, environmentKey) {
+    const phoneNumber = (
+        process.env[environmentKey] || userConfig[configKey] || ""
+    ).trim();
+
+    if (!phoneNumber || !/^\d{10}$/.test(phoneNumber)) {
+        throw new Error(
+            `Set ${configKey} in test-data/userConfig.json or ${environmentKey} to a 10-digit phone number.`
+        );
+    }
+
+    return phoneNumber;
+}
 
 class LoginPage {
 
@@ -25,6 +39,9 @@ class LoginPage {
         await this.page.waitForTimeout(3000);
 
         console.log("Flipkart home page opened.");
+
+        // Close login popup if it appears
+        await this.closeLoginPopup();
     }
 
     async openLoginModal() {
@@ -92,19 +109,14 @@ class LoginPage {
     }
 
     async loginWithPhoneNumber() {
-        const phoneNumber = process.env.FLIPKART_PHONE || userConfig.phoneNumber;
-
-        if (!phoneNumber || !/^\d{10}$/.test(phoneNumber)) {
-            throw new Error(
-                "Set FLIPKART_PHONE to the 10-digit phone number used for Flipkart login."
-            );
-        }
-
+        const phoneNumber = configuredPhoneNumber(
+            "positiveFlowPhoneNumber",
+            "FLIPKART_POSITIVE_PHONE"
+        );
         await this.openLoginModal();
         await this.submitPhoneNumberForOtp(phoneNumber);
 
         console.log("Waiting for the Flipkart SMS OTP screen. Enter the OTP in the browser.");
-
         console.log("Enter the SMS OTP in the browser. The automation will click Verify when all OTP digits are entered.");
 
         await this.page.waitForFunction(
@@ -128,8 +140,7 @@ class LoginPage {
                     visibleInputs[0].maxLength <= 8
                         ? visibleInputs[0].maxLength
                         : visibleInputs.length > 1
-                            ? visibleInputs.length
-                            : 6;
+                            ? visibleInputs.length : 6;
                 const otp = visibleInputs
                     .map(input => input.value)
                     .join("");
@@ -162,14 +173,10 @@ class LoginPage {
     }
 
     async submitIncorrectOtp() {
-        const phoneNumber = process.env.FLIPKART_PHONE || userConfig.phoneNumber;
-
-        if (!phoneNumber || !/^\d{10}$/.test(phoneNumber)) {
-            throw new Error(
-                "Set FLIPKART_PHONE to a valid 10-digit phone number for the OTP negative test."
-            );
-        }
-
+        const phoneNumber = configuredPhoneNumber(
+            "invalidOtpPhoneNumber",
+            "FLIPKART_INVALID_OTP_PHONE"
+        );
         await this.startOtpVerification(phoneNumber);
 
         const otpInputs = this.page.locator(
@@ -215,13 +222,12 @@ class LoginPage {
 
     otpError() {
         return this.page.getByText(
-            /(?:invalid|incorrect|wrong|expired|valid)\s*(?:otp|code)|(?:otp|code)\s*(?:is\s*)?(?:invalid|incorrect|wrong|expired|valid)/i
+            /(?:invalid|incorrect|wrong|expired)\s*(?:otp|code)|(?:otp|code)\s*(?:is\s*)?(?:invalid|incorrect|wrong|expired)/i
         ).first();
     }
 
     async startOtpVerification(phoneNumber) {
         await this.page.goto(`${config.baseUrl}/login?ret=%2F`);
-
         await this.submitPhoneNumberForOtp(phoneNumber);
     }
 
@@ -238,7 +244,6 @@ class LoginPage {
             state: "visible",
             timeout: 15000
         });
-
         await phoneInput.scrollIntoViewIfNeeded();
         await this.page.waitForTimeout(1500);
         await phoneInput.pressSequentially(phoneNumber, {
@@ -325,6 +330,9 @@ class LoginPage {
             await this.page.waitForTimeout(1000);
 
         } catch (error) {
+            if (error.name !== "TimeoutError") {
+                throw error;
+            }
 
             console.log("Login popup is not displayed.");
         }

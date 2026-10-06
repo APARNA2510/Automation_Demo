@@ -49,7 +49,8 @@ When(
     "I search for the selected product",
     async function () {
 
-        await this.productPage.searchProduct(testData.productName);
+        const productName = process.env.PRODUCT_NAME || testData.productName;
+        await this.productPage.searchProduct(productName);
     }
 );
 
@@ -120,13 +121,15 @@ Then(
 
 
 When(
-    "I add the selected or next available product to the cart",
+    "I add the first available product to the cart",
+    { timeout: 360000 },
     async function () {
 
         this.page = await this.productPage.addProductToCart();
 
         this.selectedProductName = this.productPage.selectedProductName;
         this.selectedProductId = this.productPage.selectedProductId;
+        console.log("Stored selected product name for cart verification:", this.selectedProductName);
 
         this.cartPage = new CartPage(this.page);
     }
