@@ -6,7 +6,7 @@ class ProductPage {
         this.page = page;
 
         this.searchBox = page.locator('input[name="q"]:not([readonly])');
-        this.searchResults = page.locator(".RG5Slk");
+        this.searchResults = page.locator('a[href*="/p/"]:visible');
         this.noResultsMessage = page.getByText(
             /sorry,\s*no results found!/i
         ).first();
@@ -32,6 +32,28 @@ class ProductPage {
         await this.searchBox.press("Enter");
 
         await this.page.waitForLoadState("domcontentloaded");
+
+        try {
+            await Promise.any([
+                this.searchResults.first().waitFor({
+                    state: "visible",
+                    timeout: 30000
+                }),
+                this.noResultsMessage.waitFor({
+                    state: "visible",
+                    timeout: 30000
+                })
+            ]);
+        } catch (error) {
+            if (!(error instanceof AggregateError)) {
+                throw error;
+            }
+
+            throw new Error(
+                "The product search did not display results or a no-results message within 30 seconds.",
+                { cause: error }
+            );
+        }
 
         console.log("Product search completed.");
     }
@@ -64,7 +86,24 @@ class ProductPage {
 
 
     async addProductToCart() {
-        const resultCount = await this.searchResults.count();
+        await this.searchResults.first().waitFor({
+            state: "visible",
+            timeout: 15000
+        });
+        const productUrls = await this.searchResults.evaluateAll(links => [
+            ...new Set(
+                links
+                    .map(link => link.href)
+                    .filter(href => {
+                        try {
+                            return /\/p\//i.test(new URL(href).pathname);
+                        } catch {
+                            return false;
+                        }
+                    })
+            )
+        ]);
+        const resultCount = productUrls.length;
         console.log("Product result count:", resultCount);
 
         if (resultCount === 0) {
@@ -74,39 +113,7 @@ class ProductPage {
         const skippedProducts = [];
 
         for (let index = 0; index < resultCount; index += 1) {
-            let productUrl;
-            for (let attempt = 1; attempt <= 3; attempt += 1) {
-                const product = this.searchResults.nth(index);
-                try {
-                    await product.waitFor({
-                        state: "visible",
-                        timeout: 15000
-                    });
-                    productUrl = await product.evaluate(element => {
-                        const link = element.matches('a[href*="/p/"]')
-                            ? element
-                            : element.closest('a[href*="/p/"]') ||
-                                element.querySelector('a[href*="/p/"]');
-                        return link?.href || null;
-                    });
-                    if (productUrl) {
-                        break;
-                    }
-
-                    throw new Error(
-                        `Search result ${index + 1} does not contain a product link.`
-                    );
-                } catch (error) {
-                    if (
-                        !/not attached to the DOM/i.test(error.message) ||
-                        attempt === 3
-                    ) {
-                        throw error;
-                    }
-                    await this.page.waitForTimeout(500);
-                }
-            }
-
+            const productUrl = productUrls[index];
             const productUrlObject = new URL(productUrl, this.page.url());
             if (
                 productUrlObject.origin !== new URL(this.page.url()).origin ||
@@ -145,69 +152,97 @@ class ProductPage {
             const addToCartButton = productPage.getByRole("button", {
                 name: /add to cart/i
             }).first();
-            const legacyAddToCartControl = productPage.locator(
-                'svg:has(g[clip-path="url(#AddToCart_a)"], path[d^="M17 18.375H7.35116"])'
-            ).locator("xpath=ancestor::div[2]").first();
+            const addToCartIcon = productPage.locator(
+                "[clip-path='url(#AddToCart_a)']"
+            ).last();
+            const addToCartIconControl = addToCartIcon.locator(
+                "xpath=ancestor::div[2]"
+            );
             const outOfStockMessage = productPage.getByText(
                 /out of stock|sold out|currently unavailable|currently not available/i
             ).first();
             const isMarkedOutOfStock =
                 await outOfStockMessage.count() > 0 &&
                 await outOfStockMessage.isVisible();
-            let addToCartControl;
-            let hasVisibleAddToCart = false;
 
-            if (!isMarkedOutOfStock) {
-                if (await addToCartButton.count() > 0) {
-                    try {
-                        await addToCartButton.waitFor({
-                            state: "visible",
-                            timeout: 10000
-                        });
-                        addToCartControl = addToCartButton;
-                        hasVisibleAddToCart = true;
-                    } catch (error) {
-                        if (error.name !== "TimeoutError") {
-                            throw error;
-                        }
-                    }
-                }
-
-                if (!hasVisibleAddToCart) {
-                    addToCartControl = legacyAddToCartControl;
-                    try {
-                        await addToCartControl.waitFor({
-                            state: "visible",
-                            timeout: 5000
-                        });
-                        hasVisibleAddToCart = true;
-                    } catch (error) {
-                        if (error.name !== "TimeoutError") {
-                            throw error;
-                        }
-                    }
-                }
-            }
-
-            if (isMarkedOutOfStock || !hasVisibleAddToCart) {
-                const reason = isMarkedOutOfStock
-                    ? "the page marks it unavailable"
-                    : "no visible Add to Cart control was found";
+            if (isMarkedOutOfStock) {
                 console.log(
-                    `Skipping search result ${index + 1}: ${reason}.`
+                    `Skipping search result ${index + 1}: the page marks it unavailable.`
                 );
                 skippedProducts.push(productTitle || `search result ${index + 1}`);
                 await productPage.close();
                 continue;
             }
 
-            await addToCartControl.scrollIntoViewIfNeeded();
-            await productPage.waitForTimeout(1000);
-            console.log("Clicking Add to Cart...");
-            await addToCartControl.click({ timeout: 15000 });
-            console.log("Add to Cart clicked successfully.");
+            let navigatedToCart =
+                await this.openCartFromConfirmationIfVisible(productPage);
 
-            await this.closeCartConfirmationIfVisible(productPage);
+            if (!navigatedToCart) {
+                let addToCartControl;
+                try {
+                    await addToCartButton.waitFor({
+                        state: "visible",
+                        timeout: 5000
+                    });
+                    addToCartControl = addToCartButton;
+                } catch (error) {
+                    if (error.name !== "TimeoutError") {
+                        throw error;
+                    }
+                }
+
+                if (!addToCartControl) {
+                    try {
+                        await addToCartIconControl.waitFor({
+                            state: "visible",
+                            timeout: 10000
+                        });
+                        addToCartControl = addToCartIconControl;
+                    } catch (error) {
+                        if (error.name !== "TimeoutError") {
+                            throw error;
+                        }
+                    }
+                }
+
+                if (!addToCartControl) {
+                    console.log(
+                        `Skipping search result ${index + 1}: the Add to Cart control was not visible.`
+                    );
+                    skippedProducts.push(productTitle || `search result ${index + 1}`);
+                    await productPage.close();
+                    continue;
+                }
+
+                await addToCartControl.scrollIntoViewIfNeeded();
+                await productPage.waitForTimeout(1000);
+                console.log(
+                    addToCartControl === addToCartButton
+                        ? "Clicking Add to Cart..."
+                        : 'Clicking the control containing [clip-path="url(#AddToCart_a)"]...'
+                );
+                await addToCartControl.click({ timeout: 15000 });
+                console.log("Add to Cart clicked successfully.");
+
+                navigatedToCart =
+                    await this.openCartFromConfirmationIfVisible(productPage);
+            }
+
+            if (!navigatedToCart) {
+                const cartLink = productPage.locator(
+                    'a[href*="/viewcart"]'
+                ).first();
+                await cartLink.waitFor({
+                    state: "visible",
+                    timeout: 15000
+                });
+                await cartLink.click({ timeout: 15000 });
+                await productPage.waitForURL(
+                    url => url.pathname.includes("/viewcart"),
+                    { timeout: 15000 }
+                );
+                console.log("Opened the cart from the page cart link.");
+            }
 
             const selectedProductName = productTitle
                 .replace(/\s+Online at Best Price On Flipkart\.com$/i, "")
@@ -237,13 +272,11 @@ class ProductPage {
         );
     }
 
-    async closeCartConfirmationIfVisible(page) {
-        const confirmationMessage = page.getByText(
-            /1 item added to the cart/i
-        ).first();
+    async openCartFromConfirmationIfVisible(page) {
+        const confirmationPopup = this.getCartConfirmationPopup(page);
 
         try {
-            await confirmationMessage.waitFor({
+            await confirmationPopup.waitFor({
                 state: "visible",
                 timeout: 3000
             });
@@ -253,26 +286,32 @@ class ProductPage {
             }
 
             console.log("Add-to-cart confirmation popup is not displayed.");
-            return;
+            return false;
         }
 
-        const closeControl = page.locator(
-            '[aria-label="Close"]:visible'
-        ).last();
-        if (await closeControl.count() > 0) {
-            await closeControl.click({
-                timeout: 5000
-            });
-        } else {
-            await page.keyboard.press("Escape");
-        }
-
-        await confirmationMessage.waitFor({
-            state: "hidden",
-            timeout: 5000
+        const goToCartControl = confirmationPopup.getByText("GO TO CART", {
+            exact: true
+        }).last();
+        await goToCartControl.waitFor({
+            state: "visible",
+            timeout: 10000
         });
+        await goToCartControl.click({ timeout: 15000 });
+        await page.waitForURL(
+            url => url.pathname.includes("/viewcart"),
+            { timeout: 15000 }
+        );
+        console.log("Clicked GO TO CART in the confirmation popup.");
+        return true;
+    }
 
-        console.log("Add-to-cart confirmation popup closed.");
+    getCartConfirmationPopup(page) {
+        const confirmationMessage = page.getByText(
+            /1 item added to the cart/i
+        ).first();
+        return confirmationMessage.locator(
+            'xpath=ancestor::div[.//*[normalize-space(.)="GO TO CART"]][1]'
+        );
     }
 }
 

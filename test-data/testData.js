@@ -1,5 +1,5 @@
 module.exports = {
-    productName: "mobile phone",
+    productName: "laptop",
     invalidProductName: "@@@@@@@@@@@@@@@@@@@@@@@\\",
     invalidOtp: "000000"
 };
